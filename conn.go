@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
 
 var (
@@ -41,12 +42,14 @@ type Conn struct {
 	unixFD bool
 	uuid   string
 
-	handler       Handler
-	signalHandler SignalHandler
-	serialGen     SerialGenerator
-	inInt         Interceptor
-	outInt        Interceptor
-	auth          []Auth
+	handler                   Handler
+	signalHandler             SignalHandler
+	signalSubscriptions       atomic.Pointer[signalSubscriptions]
+	signalSubscriptionsClosed atomic.Bool
+	serialGen                 SerialGenerator
+	inInt                     Interceptor
+	outInt                    Interceptor
+	auth                      []Auth
 
 	names      *nameTracker
 	calls      *callTracker
@@ -325,6 +328,10 @@ func (conn *Conn) BusObject() BusObject {
 // not be called on shared connections.
 func (conn *Conn) Close() error {
 	conn.closeOnce.Do(func() {
+		conn.signalSubscriptionsClosed.Store(true)
+		if subscriptions := conn.signalSubscriptions.Load(); subscriptions != nil {
+			subscriptions.terminate()
+		}
 		conn.outHandler.close()
 		if term, ok := conn.signalHandler.(Terminator); ok {
 			term.Terminate()
@@ -479,6 +486,9 @@ func (conn *Conn) handleSignal(sequence Sequence, msg *Message) {
 		Body:     msg.Body,
 		Sequence: sequence,
 	}
+	if subscriptions := conn.signalSubscriptions.Load(); subscriptions != nil {
+		subscriptions.deliver(signal)
+	}
 	conn.signalHandler.DeliverSignal(iface, member, signal)
 }
 
@@ -504,7 +514,7 @@ func (conn *Conn) sendMessageAndIfClosed(msg *Message, ifClosed func()) error {
 	err := conn.outHandler.sendAndIfClosed(msg, ifClosed)
 	if err != nil {
 		conn.handleSendError(msg, err)
-	} else if msg.Type != TypeMethodCall {
+	} else if msg.Type != TypeMethodCall || msg.Flags&FlagNoReplyExpected != 0 {
 		conn.serialGen.RetireSerial(msg.serial)
 	}
 	return err
@@ -555,16 +565,16 @@ func (conn *Conn) send(ctx context.Context, msg *Message, ch chan *Call) *Call {
 	if ctx == nil {
 		panic("nil context")
 	}
-	if ch == nil {
-		ch = make(chan *Call, 1)
-	} else if cap(ch) == 0 {
-		panic("dbus: unbuffered channel passed to (*Conn).Send")
-	}
-
 	var call *Call
-	ctx, canceler := context.WithCancel(ctx)
 	msg.serial = conn.getSerial()
 	if msg.Type == TypeMethodCall && msg.Flags&FlagNoReplyExpected == 0 {
+		if ch == nil {
+			ch = make(chan *Call, 1)
+		} else if cap(ch) == 0 {
+			conn.serialGen.RetireSerial(msg.serial)
+			panic("dbus: unbuffered channel passed to (*Conn).Send")
+		}
+		ctx, canceler := context.WithCancel(ctx)
 		call = new(Call)
 		call.Destination, _ = msg.Headers[FieldDestination].value.(string)
 		call.Path, _ = msg.Headers[FieldPath].value.(ObjectPath)
@@ -578,7 +588,7 @@ func (conn *Conn) send(ctx context.Context, msg *Message, ch chan *Call) *Call {
 		conn.calls.track(msg.serial, call)
 		if ctx.Err() != nil {
 			// short path: don't even send the message if context already cancelled
-			conn.calls.handleSendError(msg, ctx.Err())
+			conn.handleSendError(msg, ctx.Err())
 			return call
 		}
 		go func() {
@@ -591,13 +601,16 @@ func (conn *Conn) send(ctx context.Context, msg *Message, ch chan *Call) *Call {
 			canceler()
 		})
 	} else {
-		canceler()
-		call = &Call{Err: nil, Done: ch}
-		ch <- call
-		// error is handled in handleSendError
-		_ = conn.sendMessageAndIfClosed(msg, func() {
-			call = &Call{Err: ErrClosed}
-		})
+		// No reply will complete this call. Ignore the caller's channel, as
+		// documented, and publish a complete result only after the send.
+		call = &Call{Err: ctx.Err(), Done: make(chan *Call, 1)}
+		if call.Err != nil {
+			conn.serialGen.RetireSerial(msg.serial)
+		} else {
+			call.Err = conn.sendMessageAndIfClosed(msg, nil)
+		}
+		call.Done <- call
+		close(call.Done)
 	}
 	return call
 }
@@ -827,7 +840,7 @@ func (h *outputHandler) sendAndIfClosed(msg *Message, ifClosed func()) error {
 		if ifClosed != nil {
 			ifClosed()
 		}
-		return nil
+		return ErrClosed
 	}
 	h.sendLck.Lock()
 	defer h.sendLck.Unlock()
@@ -866,6 +879,9 @@ func (gen *serialGenerator) GetSerial() uint32 {
 }
 
 func (gen *serialGenerator) RetireSerial(serial uint32) {
+	if serial == 0 {
+		return
+	}
 	gen.lck.Lock()
 	defer gen.lck.Unlock()
 	delete(gen.serialUsed, serial)

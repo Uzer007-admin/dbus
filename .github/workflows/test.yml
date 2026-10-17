@@ -2,9 +2,9 @@ name: Test
 
 on:
   push:
-    branches: [ master ]
+    branches: [ main ]
   pull_request:
-    branches: [ master ]
+    branches: [ main ]
 
 permissions:
   contents: read
@@ -14,11 +14,11 @@ jobs:
   lint:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
         with:
-          go-version: stable
-      - uses: golangci/golangci-lint-action@v9
+          go-version: "1.27.1"
+      - uses: golangci/golangci-lint-action@v9.3.0
         with:
           version: v2.14
 
@@ -28,17 +28,17 @@ jobs:
       fail-fast: false
       matrix:
         go-version:
-          - "oldstable"
+          - "1.27.1"
           - "stable"
           - "" # Fall back to using go-version-file below; see https://github.com/actions/setup-go/issues/450#issuecomment-3620402646.
 
     steps:
 
     - name: Checkout
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7.0.1
 
     - name: Set up Go
-      uses: actions/setup-go@v6
+      uses: actions/setup-go@v7.0.0
       with:
         go-version: ${{ matrix.go-version }}
         go-version-file: go.mod # Only used when go-version is empty.
@@ -58,7 +58,7 @@ jobs:
   codespell:
     runs-on: ubuntu-24.04
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7.0.1
     - uses: codespell-project/actions-codespell@v2
 
   lima:
@@ -70,7 +70,7 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7.0.1
 
     - uses: lima-vm/lima-actions/setup@v1
       id: lima-actions-setup

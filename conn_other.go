@@ -70,6 +70,9 @@ func tryDiscoverDbusSessionBusAddress() string {
 }
 
 func getRuntimeDirectory() (string, error) {
+	if directory := os.Getenv("XDG_RUNTIME_DIR"); directory != "" && path.IsAbs(directory) {
+		return directory, nil
+	}
 	if currentUser, err := user.Current(); err != nil {
 		return "", err
 	} else {

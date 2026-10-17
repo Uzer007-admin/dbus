@@ -185,7 +185,10 @@ func storeMapIntoMap(dest, src reflect.Value) error {
 	for _, key := range keys {
 		dkey := key.Convert(dest.Type().Key())
 		dval := reflect.New(dest.Type().Elem()).Elem()
-		err := store(dval, getVariantValue(src.MapIndex(key)))
+		// Let setDest unwrap only when the destination is not a Variant.
+		// Rebuilding a decoded struct variant from []any would change its
+		// original wire signature (for example, (ddd) becomes av).
+		err := store(dval, src.MapIndex(key))
 		if err != nil {
 			return err
 		}
@@ -278,7 +281,7 @@ func storeSliceIntoSlice(dest, src reflect.Value) error {
 		dest.Set(dest.Slice(0, src.Len()))
 	}
 	for i := 0; i < src.Len(); i++ {
-		err := store(dest.Index(i), getVariantValue(src.Index(i)))
+		err := store(dest.Index(i), src.Index(i))
 		if err != nil {
 			return err
 		}

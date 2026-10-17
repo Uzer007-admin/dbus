@@ -2,6 +2,7 @@ package dbus
 
 import (
 	"bufio"
+	"errors"
 	"os"
 	"os/exec"
 	"syscall"
@@ -80,6 +81,9 @@ func startDaemonInDifferentUserNamespace(t *testing.T) (string, *os.Process) {
 		t.Fatal(err)
 	}
 	if err := cmd.Start(); err != nil {
+		if errors.Is(err, syscall.ENOSPC) || errors.Is(err, syscall.EPERM) {
+			t.Skipf("user/PID namespaces unavailable on this host: %v", err)
+		}
 		t.Fatal(err)
 	}
 	r := bufio.NewReader(out)

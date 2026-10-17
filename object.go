@@ -110,7 +110,7 @@ func (o *Object) createCall(ctx context.Context, method string, flags Flags, ch 
 	method = method[i+1:]
 	msg := new(Message)
 	msg.Type = TypeMethodCall
-	msg.Flags = flags & (FlagNoAutoStart | FlagNoReplyExpected)
+	msg.Flags = flags & (FlagNoAutoStart | FlagNoReplyExpected | FlagAllowInteractiveAuthorization)
 	msg.Headers = make(map[HeaderField]Variant)
 	msg.Headers[FieldPath] = MakeVariant(o.path)
 	msg.Headers[FieldDestination] = MakeVariant(o.dest)

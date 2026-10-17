@@ -125,7 +125,7 @@ func DecodeMessageWithFDs(rd io.Reader, fds []int) (msg *Message, err error) {
 	var headers []header
 
 	b := make([]byte, 1)
-	_, err = rd.Read(b)
+	_, err = io.ReadFull(rd, b)
 	if err != nil {
 		return
 	}
@@ -151,6 +151,9 @@ func DecodeMessageWithFDs(rd io.Reader, fds []int) (msg *Message, err error) {
 	}
 	msg.Type = Type(typ)
 	msg.Flags = Flags(flags)
+	if proto != protoVersion {
+		return nil, InvalidMessageError("unsupported protocol version")
+	}
 
 	// get the header length separately because we need it later
 	b = make([]byte, 4)
@@ -158,10 +161,8 @@ func DecodeMessageWithFDs(rd io.Reader, fds []int) (msg *Message, err error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := binary.Read(bytes.NewBuffer(b), order, &hlength); err != nil {
-		return nil, err
-	}
-	if hlength+length+16 > 1<<27 {
+	hlength = order.Uint32(b)
+	if uint64(hlength)+uint64(length)+16 > 1<<27 {
 		return nil, InvalidMessageError("message is too long")
 	}
 	dec = newDecoder(io.MultiReader(bytes.NewBuffer(b), rd), order, fds)
@@ -202,7 +203,12 @@ func DecodeMessageWithFDs(rd io.Reader, fds []int) (msg *Message, err error) {
 		if err != nil {
 			return nil, err
 		}
+		if buf.Len() != 0 {
+			return nil, InvalidMessageError("body length does not match signature")
+		}
 		msg.Body = vs
+	} else if len(body) != 0 {
+		return nil, InvalidMessageError("non-empty body without signature")
 	}
 
 	return
@@ -217,6 +223,8 @@ func DecodeMessage(rd io.Reader) (msg *Message, err error) {
 }
 
 type nullwriter struct{}
+
+func (nullwriter) WriteString(value string) (int, error) { return len(value), nil }
 
 func (nullwriter) Write(p []byte) (cnt int, err error) {
 	return len(p), nil
